@@ -39,9 +39,53 @@ export type TerminalFontSources = {
   editorFontFamily?: string;
 };
 
-/** Appends the generic fallback VS Code's terminal appends, without duplicating it. */
+function isMonospaceSegment(segment: string): boolean {
+  return /^monospace$/i.test(segment);
+}
+
+/**
+ * Normalizes a configured font stack and appends the generic fallback VS Code's
+ * terminal appends, without duplicating it. Splitting and rejoining matters:
+ * a raw `${family}, monospace` turns `"Consolas,"` into
+ * `"Consolas,, monospace"`, which Chromium can reject outright.
+ */
 export function appendMonospaceFallback(family: string): string {
-  return /(?:^|,)\s*monospace\s*$/i.test(family) ? family : `${family}, monospace`;
+  const segments: string[] = [];
+  for (const raw of family.split(",")) {
+    const segment = raw.trim();
+    if (!segment) {
+      continue;
+    }
+    // Keep the first `monospace` and drop later duplicates (any casing).
+    if (isMonospaceSegment(segment) && segments.some(isMonospaceSegment)) {
+      continue;
+    }
+    segments.push(segment);
+  }
+
+  if (segments.length === 0) {
+    return "monospace";
+  }
+
+  if (!isMonospaceSegment(segments[segments.length - 1])) {
+    segments.push("monospace");
+  }
+
+  return segments.join(", ");
+}
+
+/**
+ * A configured family is only usable when something besides separators,
+ * whitespace and quotes is left. `","` and `"''"` are truthy strings but carry
+ * no font, so they must not shadow the next source.
+ */
+function isUsableFamily(family: string | undefined): family is string {
+  return typeof family === "string" && /[^\s,'"]/.test(family);
+}
+
+/** Only a finite, positive number is a usable size; `0` means "inherit". */
+function isUsableFontSize(size: unknown): size is number {
+  return typeof size === "number" && Number.isFinite(size) && size > 0;
 }
 
 /**
@@ -50,14 +94,16 @@ export function appendMonospaceFallback(family: string): string {
  * then the platform default.
  */
 export function resolveTerminalFont(sources: TerminalFontSources): TerminalFont {
-  const family =
-    sources.fontFamily?.trim() ||
-    sources.terminalFontFamily?.trim() ||
-    sources.editorFontFamily?.trim() ||
-    DEFAULT_TERMINAL_FONT.family;
+  const configuredFamily = [
+    sources.fontFamily,
+    sources.terminalFontFamily,
+    sources.editorFontFamily,
+  ].find(isUsableFamily);
+  const family = configuredFamily?.trim() || DEFAULT_TERMINAL_FONT.family;
 
   const size =
-    sources.fontSize || sources.terminalFontSize || DEFAULT_TERMINAL_FONT.size;
+    [sources.fontSize, sources.terminalFontSize].find(isUsableFontSize) ??
+    DEFAULT_TERMINAL_FONT.size;
 
   return { family: appendMonospaceFallback(family), size };
 }

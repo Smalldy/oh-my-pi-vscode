@@ -14,8 +14,25 @@ describe("appendMonospaceFallback", () => {
 
   it("does not duplicate an existing generic fallback", () => {
     assert.equal(appendMonospaceFallback("Consolas, monospace"), "Consolas, monospace");
-    assert.equal(appendMonospaceFallback("Consolas,monospace"), "Consolas,monospace");
     assert.equal(appendMonospaceFallback("Consolas, Monospace"), "Consolas, Monospace");
+    assert.equal(
+      appendMonospaceFallback("Consolas, monospace, monospace"),
+      "Consolas, monospace",
+    );
+  });
+
+  it("normalizes trailing and empty separators instead of emitting empty entries", () => {
+    // A raw `${family}, monospace` would produce "Consolas,, monospace", which
+    // Chromium may reject as an invalid font-family list.
+    assert.equal(appendMonospaceFallback("Consolas,"), "Consolas, monospace");
+    assert.equal(appendMonospaceFallback("Consolas, , "), "Consolas, monospace");
+    assert.equal(appendMonospaceFallback("Consolas,monospace"), "Consolas, monospace");
+    assert.equal(appendMonospaceFallback(" Consolas ,  'Courier New' "), "Consolas, 'Courier New', monospace");
+  });
+
+  it("does not produce an empty leading entry for a blank family", () => {
+    assert.equal(appendMonospaceFallback(""), "monospace");
+    assert.equal(appendMonospaceFallback(" , "), "monospace");
   });
 });
 
@@ -71,5 +88,39 @@ describe("resolveTerminalFont", () => {
     assert.equal(resolveTerminalFont({ fontSize: 0, terminalFontSize: 12 }).size, 12);
     assert.equal(resolveTerminalFont({ terminalFontSize: 18 }).size, 18);
     assert.equal(resolveTerminalFont({}).size, 14);
+  });
+
+  it("ignores sizes that are not finite positive numbers", () => {
+    // terminalHtml.ts interpolates the size into the inline script verbatim, so
+    // a bad value ("14px", NaN, -5) either breaks the script or renders nothing.
+    assert.equal(resolveTerminalFont({ fontSize: -5, terminalFontSize: 12 }).size, 12);
+    assert.equal(resolveTerminalFont({ fontSize: NaN }).size, 14);
+    assert.equal(resolveTerminalFont({ fontSize: "14px" as any }).size, 14);
+    assert.equal(resolveTerminalFont({ fontSize: Infinity }).size, 14);
+    assert.equal(resolveTerminalFont({ terminalFontSize: -1 }).size, 14);
+    assert.equal(resolveTerminalFont({ fontSize: 0, terminalFontSize: 12 }).size, 12);
+  });
+
+  it("ignores a family source that has no visible characters", () => {
+    // `","` and `"''"` are truthy, so the old `||` chain let them shadow
+    // editor.fontFamily and fall back to a bare `monospace` — the exact bug this
+    // change fixes.
+    const fromEditor = resolveTerminalFont({
+      fontFamily: ",",
+      editorFontFamily: "JetBrains Mono",
+    });
+    assert.match(fromEditor.family, /JetBrains Mono/);
+    assert.equal(fromEditor.family, "JetBrains Mono, monospace");
+
+    const onlyQuotes = resolveTerminalFont({ fontFamily: "''" });
+    assert.notEqual(onlyQuotes.family, "monospace");
+    assert.equal(onlyQuotes.family, DEFAULT_TERMINAL_FONT.family);
+
+    const allInvalid = resolveTerminalFont({
+      fontFamily: ",",
+      terminalFontFamily: "  ",
+      editorFontFamily: '""',
+    });
+    assert.equal(allInvalid.family, appendMonospaceFallback(DEFAULT_TERMINAL_FONT.family));
   });
 });
